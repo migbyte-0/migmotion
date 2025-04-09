@@ -1,4 +1,3 @@
-
 return {
   "migbyte-0/migmotion .nvim",
   config = function()
