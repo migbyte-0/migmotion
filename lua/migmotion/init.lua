@@ -1,8 +1,9 @@
+
 return {
-  "migbyte-0/migmotion.nvim",
+  "migbyte-0/migmotion .nvim",
   config = function()
-    -- word_nav.nvim: Numbered and Colored Virtual Text for Neovim
-    -- Author: YourName
+    -- migmotion.nvim: Numbered and Colored Virtual Text for Neovim
+    -- Author: migbyte
     -- License: MIT
 
     local M = {}
@@ -12,7 +13,7 @@ return {
       max = 12,
       before = true,
       after = true,
-      virt = 'number', -- 'number' or 'dot'
+      virt = 'number',      -- 'number' or 'dot'
       position = 'overlay', -- 'overlay' or 'above' or 'below'
       colors = { 'Green', 'Blue', 'Yellow', 'Purple', 'Indigo', 'Cyan', 'Red', 'Orange', 'Magenta', 'White', 'Grey', 'Brown' },
       namespace = nil,
@@ -46,7 +47,7 @@ return {
       local bufnr = vim.api.nvim_get_current_buf()
       M.clear(bufnr)
       local row, col = unpack(vim.api.nvim_win_get_cursor(0))
-      local line = vim.api.nvim_buf_get_lines(bufnr, row-1, row, false)[1]
+      local line = vim.api.nvim_buf_get_lines(bufnr, row - 1, row, false)[1]
       if not line then return end
       local words = {}
       for w in line:gmatch('%S+') do table.insert(words, w) end
@@ -54,7 +55,7 @@ return {
       local idx = 1
       for i, w in ipairs(words) do
         local s, e = line:find(w, idx, true)
-        table.insert(positions, {start=s-1, word=w})
+        table.insert(positions, { start = s - 1, word = w })
         idx = e + 1
       end
 
@@ -68,8 +69,8 @@ return {
           local pos = positions[i]
           local symbol = M.config.virt == 'number' and tostring(math.abs(i - cur_idx)) or '•'
           local group = M.config.hl_prefix .. (((i - cur_idx - 1) % #M.config.colors) + 1)
-          vim.api.nvim_buf_set_extmark(bufnr, M.config.namespace, row-1, pos.start, {
-            virt_text = {{symbol, group}},
+          vim.api.nvim_buf_set_extmark(bufnr, M.config.namespace, row - 1, pos.start, {
+            virt_text = { { symbol, group } },
             virt_text_pos = M.config.position,
             hl_mode = 'combine',
           })
@@ -130,8 +131,8 @@ return {
     -- Setup keymaps
     function M.set_keymaps()
       local wk = vim.api.nvim_set_keymap
-      local opts = { noremap=true, silent=true }
-      wk('n', '<leader>wn', ":lua require'word_nav'.toggle()<CR>", opts)        -- Toggle plugin
+      local opts = { noremap = true, silent = true }
+      wk('n', '<leader>wn', ":lua require'word_nav'.toggle()<CR>", opts)          -- Toggle plugin
       wk('n', '<leader>wv', ":lua require'word_nav'.toggle_virt()<CR>", opts)     -- Toggle number/dot
       wk('n', '<leader>wp', ":lua require'word_nav'.toggle_position()<CR>", opts) -- Cycle overlay/above/below
     end
