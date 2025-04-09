@@ -1,5 +1,5 @@
 return {
-  "yourname/word_nav.nvim",
+  "migbyte-0/migmotion.nvim",
   config = function()
     -- word_nav.nvim: Numbered and Colored Virtual Text for Neovim
     -- Author: YourName
