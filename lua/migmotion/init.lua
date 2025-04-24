@@ -1,49 +1,47 @@
--- migmotion.lua ─ Word‑navigation halos & colour‑gradient highlighter for Neovim
--- Author: migbyte — MIT
--- Compatible with Neovim ≥ 0.9.0 (no unstable API)
+-- migmotion.lua ─ Word‑navigation halos & gradient highlighter
+-- Author: migbyte — MIT | Neovim ≥ 0.9
 
--- ╭─────────────────────────────────────────────────────────────╮
--- │ 2025‑04‑26 – overhaul                                       │
--- │ •   Removed fade‑out; halos persist.                         │
--- │ •   Added *highlight mode* (gradient word highlights).       │
--- │     Toggle with <leader>mh.                                  │
--- │ •   Tiny superscript numbers/dots now shown *before* word.   │
--- │ •   Fixed colouring: uses #hex or links to Identifier.       │
--- │ •   Replaced invalid virt_text_pos="above" (not in 0.9).    │
--- ╰─────────────────────────────────────────────────────────────╯
+-- 2025‑04‑26‑c
+-- • Fix highlight‑mode crash (nvim_buf_add_highlight param order).
+-- • Coloured digits/dots assured (if termguicolors off, links fall back).
+-- • Halos rendered with virt_text_pos = "inline" so they **precede** the
+--   word without overwriting characters.
+-- • Superscript for 1‑9; 10‑99 rendered as two stacked superscripts: the
+--   first digit inline before word, the second digit one row **above**.
+--   Keeps word spacing intact even for double‑digit offsets.
+-- • New toggle <leader>mh (halo ↔ highlight).
 
-local M, uv = {}, vim.loop
+local M = {}
 
 ------------------------------------------------------------------------
--- Configuration --------------------------------------------------------
+-- Config ---------------------------------------------------------------
 ------------------------------------------------------------------------
 M.config = {
-  max        = 0,            -- 0 ⇒ until EOL
-  before     = true,
-  after      = true,
-  virt       = "number",      -- "number" | "dot"
-  position   = "overlay",    -- "overlay" | "inline"
-  mode       = "halo",       -- "halo" | "highlight" (toggle with <leader>mh)
-  colors     = {
+  max       = 0,            -- 0 ⇒ to end of line
+  before    = true,
+  after     = true,
+  virt      = "number",      -- "number" | "dot"
+  position  = "inline",     -- inline halos (push text) vs overlay unused
+  mode      = "halo",       -- halo | highlight
+  colors    = {
     "#98c379", "#61afef", "#e5c07b", "#c678dd", "#ff6ac1", "#56b6c2",
     "#e06c75", "#d19a66", "#4aa5f0", "#abb2bf", "#5c6370", "#be5046",
   },
-  hl_prefix  = "Migmotion",
+  hl_prefix = "Migmotion",
 }
 
-M.ns      = vim.api.nvim_create_namespace("migmotion")
+M.ns = vim.api.nvim_create_namespace("migmotion")
 M.enabled = false
 
 ------------------------------------------------------------------------
 -- Highlight groups -----------------------------------------------------
 ------------------------------------------------------------------------
-local function is_hex(c) return c:match("^#%x%x%x%x%x%x$") end
-local function ensure_hl()
-  for i, color in ipairs(M.config.colors) do
+local function ensure_hls()
+  for i, col in ipairs(M.config.colors) do
     local group = M.config.hl_prefix .. i
     if vim.fn.hlID(group) == 0 then
-      if is_hex(color) then
-        vim.api.nvim_set_hl(0, group, { fg = color })
+      if vim.o.termguicolors and col:match("^#%x%x%x%x%x%x$") then
+        vim.api.nvim_set_hl(0, group, { fg = col })
       else
         vim.api.nvim_set_hl(0, group, { link = "Identifier" })
       end
@@ -52,108 +50,124 @@ local function ensure_hl()
 end
 
 ------------------------------------------------------------------------
--- Helpers --------------------------------------------------------------
+-- Utils ----------------------------------------------------------------
 ------------------------------------------------------------------------
 local supers = { ["0"]="⁰",["1"]="¹",["2"]="²",["3"]="³",["4"]="⁴",["5"]="⁵",
                  ["6"]="⁶",["7"]="⁷",["8"]="⁸",["9"]="⁹" }
-local function sup_num(n)
-  return tostring(n):gsub("%d", supers)
+local function sup(d) return supers[d] end
+local function to_sup(n)
+  local s = tostring(n)
+  if #s == 1 then return sup(s) end
+  -- two digits: we draw first digit inline, second digit above via extra mark
+  return { top = sup(s:sub(2,2)), base = sup(s:sub(1,1)) }
 end
 
-local function words_in(line)
-  local t, idx = {}, 1
+local function words(line)
+  local t, i = {}, 1
   while true do
-    local s, e = line:find("%S+", idx)
-    if not s then break end
-    t[#t+1] = { start=s-1, stop=e, len=e-s+1 }
-    idx = e+1
+    local s,e = line:find("%S+", i); if not s then break end
+    t[#t+1] = { start=s-1, stop=e, len=e-s+1 }; i = e+1
   end
   return t
 end
 
 ------------------------------------------------------------------------
--- Core draw ------------------------------------------------------------
+-- Draw -----------------------------------------------------------------
 ------------------------------------------------------------------------
 function M.draw()
   if not M.enabled then return end
-  ensure_hl()
+  ensure_hls()
 
-  local bufnr, win = vim.api.nvim_get_current_buf(), vim.api.nvim_get_current_win()
-  local row, col   = unpack(vim.api.nvim_win_get_cursor(win)); row = row-1
+  local buf = vim.api.nvim_get_current_buf()
+  local win = vim.api.nvim_get_current_win()
+  local row, col = unpack(vim.api.nvim_win_get_cursor(win)); row=row-1
+  vim.api.nvim_buf_clear_namespace(buf, M.ns, 0, -1)
 
-  -- Clear previous
-  vim.api.nvim_buf_clear_namespace(bufnr, M.ns, 0, -1)
+  local line = vim.api.nvim_buf_get_lines(buf, row, row+1, false)[1] or ""
+  if line=="" then return end
+  local wl = words(line); if #wl==0 then return end
 
-  local line = vim.api.nvim_buf_get_lines(bufnr, row, row+1, false)[1]
-  if not line or line=="" then return end
-  local wl = words_in(line); if #wl==0 then return end
-
-  -- find current word index
-  local cur=1; for i,w in ipairs(wl) do if col>=w.start and col<w.stop then cur=i break end end
-
+  local ci = 1; for i,w in ipairs(wl) do if col>=w.start and col<w.stop then ci=i break end end
   local limit=#wl; local before=(M.config.before and (M.config.max>0 and M.config.max or limit) or 0)
-  local after=(M.config.after and (M.config.max>0 and M.config.max or limit) or 0)
+  local after=(M.config.after  and (M.config.max>0 and M.config.max or limit) or 0)
 
+  ----------------------------------------------------------------------
+  -- highlight mode -----------------------------------------------------
+  ----------------------------------------------------------------------
   if M.config.mode=="highlight" then
-    -- gradient background fg across words
-    for i = math.max(1,cur-before), math.min(#wl,cur+after) do
-      if i~=cur then
-        local hl=M.config.hl_prefix..(((math.abs(i-cur)-1)%#M.config.colors)+1)
-        vim.api.nvim_buf_add_highlight(bufnr,M.ns,row,wl[i].start,wl[i].stop,hl)
+    for i=math.max(1,ci-before), math.min(#wl,ci+after) do
+      if i~=ci then
+        local hl = M.config.hl_prefix..(((math.abs(i-ci)-1)%#M.config.colors)+1)
+        vim.api.nvim_buf_add_highlight(buf, M.ns, hl, row, wl[i].start, wl[i].stop)
       end
     end
     return
   end
 
+  ----------------------------------------------------------------------
   -- halo mode ----------------------------------------------------------
+  ----------------------------------------------------------------------
   local function place(i)
-    local w=wl[i]; local dist=i-cur; local hl=M.config.hl_prefix..(((math.abs(dist)-1)%#M.config.colors)+1)
-    local sym=(M.config.virt=="number") and sup_num(math.abs(dist)) or "•"
-    -- we want tiny symbol **before** word; we use inline after previous column
-    local col_before=math.max(0,w.start-1)
-    vim.api.nvim_buf_set_extmark(bufnr,M.ns,row,0,{
-      virt_text={{sym,hl}},
-      virt_text_pos="inline",
-      virt_text_win_col=col_before,
-      hl_mode="combine",
-      priority=200,
+    local w = wl[i]
+    local dist = i-ci
+    local hl = M.config.hl_prefix..(((math.abs(dist)-1)%#M.config.colors)+1)
+    local glyph = (M.config.virt=="number" and to_sup(math.abs(dist)) or "•")
+    local col_target = w.start  -- inline will insert before word
+
+    if type(glyph)=="table" then
+      -- two-digit: draw top digit above
+      vim.api.nvim_buf_set_extmark(buf, M.ns, row-1 >=0 and row-1 or row, 0, {
+        virt_text = { { glyph.top, hl } },
+        virt_text_pos = "inline",
+        virt_text_win_col = col_target,
+        hl_mode="combine", priority=200,
+      })
+      glyph = glyph.base
+    end
+
+    vim.api.nvim_buf_set_extmark(buf, M.ns, row, 0, {
+      virt_text = { { glyph, hl } },
+      virt_text_pos = "inline",
+      virt_text_win_col = col_target,
+      hl_mode = "combine", priority = 200,
     })
   end
-  for i=math.max(1,cur-before),cur-1              do place(i) end
-  for i=cur+1,            math.min(#wl,cur+after) do place(i) end
+
+  for i = math.max(1,ci-before), ci-1           do place(i) end
+  for i = ci+1,           math.min(#wl, ci+after) do place(i) end
 end
 
 ------------------------------------------------------------------------
--- Autocmd & state ------------------------------------------------------
+-- State & autocmd ------------------------------------------------------
 ------------------------------------------------------------------------
 local function attach()
   if M._au then return end
-  M._au=vim.api.nvim_create_augroup("Migmotion",{})
-  vim.api.nvim_create_autocmd({"CursorMoved","CursorMovedI"},{group=M._au,callback=M.draw})
+  M._au = vim.api.nvim_create_augroup("Migmotion", {})
+  vim.api.nvim_create_autocmd({"CursorMoved","CursorMovedI"}, {group=M._au, callback=M.draw})
 end
-function M.enable() M.enabled=true; attach(); M.draw() end
-function M.disable() M.enabled=false; if M._au then vim.api.nvim_del_augroup_by_id(M._au);M._au=nil end; vim.api.nvim_buf_clear_namespace(0,M.ns,0,-1) end
+function M.enable()  M.enabled=true; attach(); M.draw() end
+function M.disable() M.enabled=false; if M._au then vim.api.nvim_del_augroup_by_id(M._au); M._au=nil end; vim.api.nvim_buf_clear_namespace(0,M.ns,0,-1) end
 function M.toggle() (M.enabled and M.disable or M.enable)() end
 
 ------------------------------------------------------------------------
 -- Toggles --------------------------------------------------------------
 ------------------------------------------------------------------------
-function M.toggle_virt()    M.config.virt=(M.config.virt=="number" and "dot" or "number"); M.draw() end
-function M.toggle_position() M.config.position=(M.config.position=="overlay" and "inline" or "overlay"); M.draw() end
-function M.toggle_mode()   M.config.mode=(M.config.mode=="halo" and "highlight" or "halo"); M.draw() end
+function M.toggle_virt()  M.config.virt = (M.config.virt=="number" and "dot" or "number"); M.draw() end
+function M.toggle_mode()  M.config.mode  = (M.config.mode =="halo" and "highlight" or "halo"); M.draw() end
+function M.toggle_pos()   M.config.position = (M.config.position=="inline" and "overlay" or "inline"); M.draw() end
 
 ------------------------------------------------------------------------
 -- Keymaps --------------------------------------------------------------
 ------------------------------------------------------------------------
 local function maps()
-  local map,o=vim.keymap.set,{noremap=true,silent=true}
+  local map, o = vim.keymap.set, {noremap=true,silent=true}
   map("n","<leader>mn",M.toggle,o)
   map("n","<leader>mv",M.toggle_virt,o)
-  map("n","<leader>mc",M.toggle_position,o)
+  map("n","<leader>mc",M.toggle_pos,o)
   map("n","<leader>mh",M.toggle_mode,o)
   for n=1,9 do
-    map("n",string.format("<leader>%d",n),function() vim.cmd(string.format("normal! %dw",n)) end,o)
-    map("n",string.format("<leader><S-%d>",n),function() vim.cmd(string.format("normal! %db",n)) end,o)
+    map("n","<leader>"..n,function() vim.cmd((n).."w") end,o)
+    map("n","<leader><S-"..n..">",function() vim.cmd((n).."b") end,o)
   end
 end
 
@@ -162,9 +176,9 @@ end
 ------------------------------------------------------------------------
 function M.setup(opts)
   if M._setup then return end
-  M._setup=true
-  M.config = vim.tbl_deep_extend("force",M.config,opts or {})
-  ensure_hl(); maps(); M.enable()
+  M._setup = true
+  M.config = vim.tbl_deep_extend("force", M.config, opts or {})
+  ensure_hls(); maps(); M.enable()
 end
 
 return M
