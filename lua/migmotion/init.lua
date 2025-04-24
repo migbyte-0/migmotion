@@ -180,7 +180,7 @@ function M._set_keymaps()
   local map, o = vim.keymap.set, { noremap = true, silent = true }
   map("n", "<leader>mn", M.toggle,          o) -- toggle plugin
   map("n", "<leader>mv", M.toggle_virt,     o) -- number ↔ dot
-  map("n", "<leader>mp", M.toggle_position, o) -- overlay ↔ above ↔ below
+  map("n", "<leader>mc", M.toggle_position, o) -- overlay ↔ above ↔ below
 end
 
 ------------------------------------------------------------------------
