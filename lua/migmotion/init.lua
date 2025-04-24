@@ -177,7 +177,7 @@ function M._set_keymaps()
   local map, opts = vim.keymap.set, { noremap = true, silent = true }
   map("n", "<leader>mn", M.toggle,          opts)
   map("n", "<leader>mv", M.toggle_virt,     opts)
-  map("n", "<leader>mp", M.toggle_position, opts)
+  map("n", "<leader>mc", M.toggle_position, opts)
 end
 
 ------------------------------------------------------------------------
