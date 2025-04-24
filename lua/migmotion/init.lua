@@ -1,35 +1,35 @@
--- migmotion.lua ─ Minimal superscript‑number word navigator
+-- migmotion.lua — Minimal superscript navigator (red/yellow)
 -- Author: migbyte — MIT | Neovim ≥ 0.9
--- 2025‑04‑27  (plain numbers, stacked for 10+)
 
 local M = {}
 
--- Configuration (no dots, no colours, no highlight mode)
+-- Config ----------------------------------------------------------------
 M.config = {
-  max   = 0,            -- 0 ⇒ until EOL
-  before = true,
-  after  = true,
-  ns_prefix = "Migmotion", -- highlight group prefix
+  max       = 0,            -- 0 ⇒ until EOL
+  before    = true,
+  after     = true,
+  colors    = { "Red", "Yellow" }, -- cycles red → yellow → red …
+  hl_prefix = "Migmotion",
 }
 
 M.ns      = vim.api.nvim_create_namespace("migmotion")
 M.enabled = false
 
-------------------------------------------------------------------------
--- Superscript helpers --------------------------------------------------
-------------------------------------------------------------------------
+-- Superscript map -------------------------------------------------------
 local sup = { ["0"]="⁰",["1"]="¹",["2"]="²",["3"]="³",["4"]="⁴",["5"]="⁵",
               ["6"]="⁶",["7"]="⁷",["8"]="⁸",["9"]="⁹" }
-local function glyph_for(dist)
-  local s = tostring(dist)
-  if #s == 1 then return { base = sup[s] } end
-  -- two digits: stack them — topDigit overlay, bottomDigit inline
-  return { top = sup[s:sub(1,1)], base = sup[s:sub(2,2)] }
+
+-- Ensure highlight groups ----------------------------------------------
+local function ensure_hl()
+  for i,col in ipairs(M.config.colors) do
+    local group = M.config.hl_prefix..i
+    if vim.fn.hlID(group)==0 then
+      vim.api.nvim_set_hl(0, group, { link = col })
+    end
+  end
 end
 
-------------------------------------------------------------------------
--- Parse line into word ranges -----------------------------------------
-------------------------------------------------------------------------
+-- Word parser -----------------------------------------------------------
 local function words(line)
   local t, idx = {}, 1
   while true do
@@ -40,81 +40,76 @@ local function words(line)
   return t
 end
 
-------------------------------------------------------------------------
--- Draw -----------------------------------------------------------------
-------------------------------------------------------------------------
+-- Drawing ---------------------------------------------------------------
+local function place_mark(buf, row, col, text, hl)
+  vim.api.nvim_buf_set_extmark(buf, M.ns, row, 0, {
+    virt_text = { { text, hl } },
+    virt_text_pos = "overlay",
+    virt_text_win_col = col,
+    hl_mode = "combine", priority = 200,
+  })
+end
+
 function M.draw()
-  if not M.enabled then return end
+  if not M.enabled then return end; ensure_hl()
   local buf = vim.api.nvim_get_current_buf()
   local win = vim.api.nvim_get_current_win()
   local row, col = unpack(vim.api.nvim_win_get_cursor(win)); row=row-1
   vim.api.nvim_buf_clear_namespace(buf, M.ns, 0, -1)
 
-  local line = vim.api.nvim_buf_get_lines(buf, row, row+1, false)[1] or ""
+  local line = vim.api.nvim_buf_get_lines(buf,row,row+1,false)[1] or ""
   if line=="" then return end
   local wl = words(line); if #wl==0 then return end
 
-  local cur=1; for i,w in ipairs(wl) do if col>=w.start and col<w.stop then cur=i break end end
+  local ci = 1; for i,w in ipairs(wl) do if col>=w.start and col<w.stop then ci=i break end end
   local limit=#wl; local before=(M.config.before and (M.config.max>0 and M.config.max or limit) or 0)
   local after=(M.config.after  and (M.config.max>0 and M.config.max or limit) or 0)
 
   local function place(i)
-    local w = wl[i]; local dist = math.abs(i-cur)
-    local glyph = glyph_for(dist)
-    local col_before = w.start -- where to put inline symbol
+    local w = wl[i]; local dist = math.abs(i-ci)
+    local digits = tostring(dist)
+    local hl = M.config.hl_prefix..(((dist-1)%#M.config.colors)+1)
+    local col_target = math.max(0, w.start-1)  -- before word
 
-    -- top digit (only for dist >=10)
-    if glyph.top then
-      vim.api.nvim_buf_set_extmark(buf, M.ns, row, 0, {
-        virt_text = { { glyph.top, "Identifier" } },
-        virt_text_pos="overlay",
-        virt_text_win_col = col_before,
-        hl_mode="combine", priority=200,
-      })
+    if #digits==1 then
+      place_mark(buf,row,col_target,sup[digits],hl)
+    else
+      -- stack two digits
+      local top = sup[digits:sub(1,1)]
+      local base = sup[digits:sub(2,2)]
+      if row>0 then place_mark(buf,row-1,col_target,top,hl) end
+      place_mark(buf,row,col_target,base,hl)
     end
-    -- base digit (single‑digit or 2nd of double)
-    vim.api.nvim_buf_set_extmark(buf, M.ns, row, 0, {
-      virt_text = { { glyph.base, "Identifier" } },
-      virt_text_pos = "inline",
-      virt_text_win_col = col_before,
-      hl_mode = "combine", priority = 200,
-    })
   end
 
-  for i = math.max(1,cur-before), cur-1           do place(i) end
-  for i = cur+1,           math.min(#wl, cur+after) do place(i) end
+  for i=math.max(1,ci-before), ci-1             do place(i) end
+  for i=ci+1,           math.min(#wl,ci+after) do place(i) end
 end
 
-------------------------------------------------------------------------
--- Autocmd & enable/disable --------------------------------------------
-------------------------------------------------------------------------
+-- State -----------------------------------------------------------------
 local function attach()
   if M._au then return end
   M._au = vim.api.nvim_create_augroup("Migmotion", {})
   vim.api.nvim_create_autocmd({"CursorMoved","CursorMovedI"}, {group=M._au, callback=M.draw})
 end
 function M.enable()  M.enabled=true; attach(); M.draw() end
-function M.disable() M.enabled=false; if M._au then vim.api.nvim_del_augroup_by_id(M._au); M._au=nil end; vim.api.nvim_buf_clear_namespace(0,M.ns,0,-1) end
+function M.disable() M.enabled=false; if M._au then vim.api.nvim_del_augroup_by_id(M._au);M._au=nil end; vim.api.nvim_buf_clear_namespace(0,M.ns,0,-1) end
 function M.toggle() (M.enabled and M.disable or M.enable)() end
 
-------------------------------------------------------------------------
--- Keymaps --------------------------------------------------------------
-------------------------------------------------------------------------
+-- Keymaps ---------------------------------------------------------------
 local function maps()
   local map,o=vim.keymap.set,{noremap=true,silent=true}
   map("n","<leader>mn",M.toggle,o)
   for n=1,9 do
-    map("n","<leader>"..n,function() vim.cmd((n).."w") end,o)
-    map("n","<leader><S-"..n..">",function() vim.cmd((n).."b") end,o)
+    map("n","<leader>"..n,function() vim.cmd(n.."w") end,o)
+    map("n","<leader><S-"..n..">",function() vim.cmd(n.."b") end,o)
   end
 end
 
-------------------------------------------------------------------------
--- Setup ----------------------------------------------------------------
-------------------------------------------------------------------------
+-- Setup -----------------------------------------------------------------
 function M.setup(opts)
   if M._setup then return end; M._setup=true
-  M.config = vim.tbl_deep_extend("force", M.config, opts or {})
+  M.config = vim.tbl_deep_extend("force",M.config,opts or {})
   maps(); M.enable()
 end
 
